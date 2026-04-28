@@ -1,7 +1,6 @@
 # A股智能分析 Agent（StockPilot-CN）项目开发文档
 
 > **项目定位**：基于大模型多 Agent 架构的 A 股市场智能分析系统
-> **申请用途**：Xiaomi MiMo 百万亿 Token 创造者激励计划
 > **文档版本**：v1.0 | 2026-04-28
 
 ---
@@ -249,9 +248,12 @@ THEN 资金面信号 = 偏多
 | 组件 | 选型 | 说明 |
 |------|------|------|
 | Agent 框架 | Claude Code + Custom Orchestration | 利用 Claude Code 的 Agent 能力 + 自研调度层 |
-| 底层模型 | **Xiaomi MiMo-V2-Pro** | 256K 上下文，支持长研报分析 |
-| 辅助模型 | MiMo-V2-Flash | 高频轻量任务（情感分析、实体提取） |
-| Embedding | MiMo Embedding | 研报检索、语义相似度 |
+| 主力推理模型 | **GLM-5.1** | Agent 推理、意图理解、报告生成 |
+| 长文本分析模型 | **Xiaomi MiMo-V2-Pro** | 256K 上下文，用于研报/年报长文档深度分析 |
+| 高频轻量模型 | **Qwen 3.6 Plus** | 情感分析、实体提取、快速摘要等高并发任务 |
+| 多模态模型 | **Kimi K2.6** | 图表理解、K线形态视觉识别、研报图表解读 |
+| 辅助模型 | MiMo-V2-Flash | 低延迟补充任务 |
+| Embedding | Qwen Embedding | 研报检索、语义相似度 |
 
 ### 4.2 数据层
 
@@ -284,30 +286,34 @@ THEN 资金面信号 = 偏多
 
 | 使用场景 | 模型 | 日均调用量 | 单次 Token（估算） | 日均消耗 |
 |---------|------|-----------|-------------------|---------|
-| Orchestrator 任务理解与汇总 | MiMo-V2-Pro | 500 次 | ~4K input + ~2K output | ~3M Tokens |
-| 基本面分析解读 | MiMo-V2-Pro | 300 次 | ~8K input + ~1.5K output | ~2.85M Tokens |
-| 技术面分析解读 | MiMo-V2-Flash | 300 次 | ~2K input + ~1K output | ~0.9M Tokens |
-| 资金面分析 | MiMo-V2-Flash | 300 次 | ~2K input + ~1K output | ~0.9M Tokens |
-| 舆情情感分析 | MiMo-V2-Flash | 1000 次 | ~1K input + ~0.3K output | ~1.3M Tokens |
+| Orchestrator 任务理解与汇总 | GLM-5.1 | 500 次 | ~4K input + ~2K output | ~3M Tokens |
+| 基本面分析解读 | GLM-5.1 | 300 次 | ~8K input + ~1.5K output | ~2.85M Tokens |
+| 技术面分析解读 | Qwen 3.6 Plus | 300 次 | ~2K input + ~1K output | ~0.9M Tokens |
+| 资金面分析 | Qwen 3.6 Plus | 300 次 | ~2K input + ~1K output | ~0.9M Tokens |
+| 舆情情感分析 | Qwen 3.6 Plus | 1000 次 | ~1K input + ~0.3K output | ~1.3M Tokens |
 | 研报摘要提取 | MiMo-V2-Pro | 200 次 | ~15K input + ~2K output | ~3.4M Tokens |
 | 风险评估 | MiMo-V2-Flash | 300 次 | ~3K input + ~0.5K output | ~1.05M Tokens |
-| **合计** | | **~2900 次/日** | | **~13.4M Tokens/日** |
+| 图表/K线形态识别 | Kimi K2.6 | 200 次 | ~2K input + ~1K output | ~0.6M Tokens |
+| **合计** | | **~3100 次/日** | | **~14M Tokens/日** |
 
-### 5.2 Credits 消耗估算
+### 5.2 多模型调度策略
 
-- MiMo-V2-Pro 调用：约 60% 的调用量，Pro 2x 计费 → ~12M Credits/日
-- MiMo-V2-Flash 调用：约 40% 的调用量，Flash 1x 计费 → ~3.25M Credits/日
-- **日均总消耗：约 15.25M Credits**
-- **月度总消耗：约 4.575 亿 Credits**
+采用 **模型路由** 策略，根据任务特征自动选择最优模型：
 
-> 申请 Max Plan（16 亿 Credits/月）可覆盖完整开发和测试周期。
+| 任务特征 | 路由目标 | 原因 |
+|---------|---------|------|
+| 复杂推理、多步决策 | GLM-5.1 | 综合推理能力强，适合 Orchestrator 和深度分析 |
+| 长文本（>10K Token） | MiMo-V2-Pro | 256K 上下文窗口，适合完整研报/年报分析 |
+| 高并发、低延迟（情感/摘要） | Qwen 3.6 Plus | 响应快、成本优，适合批量处理 |
+| 图像/图表理解 | Kimi K2.6 | 多模态能力，适合 K 线图、财务图表解读 |
+| 轻量补充任务 | MiMo-V2-Flash | 低成本兜底 |
 
-### 5.3 为什么选择 MiMo
+### 5.3 为什么选择多模型组合
 
-1. **256K 长上下文**：单份研报 + 财报数据可达数万字，长上下文避免信息截断
-2. **成本优势**：同能力级别下 MiMo Token Plan 性价比突出
-3. **中文能力**：MiMo 针对中文场景优化，A股分析的核心语言场景天然契合
-4. **生态兼容**：Token Plan 直接支持 Claude Code、Cursor 等工具，与现有开发工作流无缝集成
+1. **发挥各自优势**：不同模型在不同任务上各有特长，组合使用比单一模型效果更好
+2. **成本优化**：轻量任务用小模型，复杂任务用大模型，避免"杀鸡用牛刀"
+3. **冗余保障**：单一模型 API 故障时，可自动切换到备选模型
+4. **中文场景全覆盖**：GLM、MiMo、Qwen、Kimi 均对中文深度优化，与 A 股分析场景天然契合
 
 ---
 
@@ -403,8 +409,11 @@ THEN 资金面信号 = 偏多
 
 | 模型 | 用途 |
 |------|------|
-| **Xiaomi MiMo-V2-Pro** | Agent 推理、研报分析、报告生成（主力模型） |
-| **Xiaomi MiMo-V2-Flash** | 高频轻量任务（情感分析、实体提取） |
+| **GLM-5.1** | Agent 推理、报告生成（主力模型） |
+| **Xiaomi MiMo-V2-Pro** | 长文本研报分析（256K 上下文） |
+| **Qwen 3.6 Plus** | 高频轻量任务（情感分析、实体提取） |
+| **Kimi K2.6** | 图表/K线形态视觉识别 |
+| **MiMo-V2-Flash** | 低延迟补充任务 |
 | **Claude Sonnet 4** | 开发辅助（Claude Code 底层模型） |
 
 ---
@@ -413,7 +422,7 @@ THEN 资金面信号 = 偏多
 
 1. **多 Agent 证券分析协作**：业内首个基于多 Agent 架构的 A 股开源分析系统，每个 Agent 专注一个分析维度
 2. **自然语言全流程交互**：从数据查询到分析报告，全程自然语言，零学习成本
-3. **MiMo 长上下文深度利用**：256K 上下文窗口使单次可分析完整年报 + 多份研报，避免信息截断
+3. **多模型智能路由**：根据任务特征自动选择最优模型（GLM 推理、MiMo 长文本、Qwen 高并发、Kimi 多模态），发挥各自优势
 4. **MCP 工具链复用**：企查查、MinerU 等已部署 MCP 直接嵌入 Agent 工具链，减少重复开发
 5. **开源 + 可自部署**：MIT 协议开源，用户可自行部署，数据不上传第三方
 
